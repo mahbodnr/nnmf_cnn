@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from timm.models.layers import trunc_normal_, DropPath
 from timm.models.registry import register_model
 
-from .nnmf.modules import NNMFConv2d, ForwardNNMF, SECURE_TENSOR_MIN
+from .nnmf.modules import NNMFConv2d, NNMFLayer, SECURE_TENSOR_MIN, ForwardNNMF
 from .nnmf.parameters import NonNegativeParameter
 
 from .network_template import NetworkTemplate
@@ -59,7 +59,7 @@ class NNMFBlock(nn.Module):
     """
     def __init__(self, dim, nnmf_iterations=20, kernel_size= 7, padding=3, expansion_ratio= 2, drop_path=0., layer_scale_init_value=1e-6):
         super().__init__()
-        self.dwconv = NNMFConv2d(dim, dim, n_iterations=nnmf_iterations, backward_method="all_grads", kernel_size=kernel_size, padding=padding, groups=dim) # depthwise conv
+        self.dwconv = NNMFConv2d(dim, dim, normalize_channels=True, n_iterations=nnmf_iterations, backward_method="all_grads", kernel_size=kernel_size, padding=padding, groups=dim) # depthwise conv
         self.norm = LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, expansion_ratio * dim) # pointwise/1x1 convs, implemented with linear layers
         self.act = nn.GELU()
@@ -84,7 +84,7 @@ class NNMFBlock(nn.Module):
         x = input + self.drop_path(x)
         return x
 
-class NNMFConvs(ForwardNNMF):
+class NNMFConvs(NNMFLayer):
     def __init__(
         self,
         dim,
@@ -148,6 +148,13 @@ class NNMFConvs(ForwardNNMF):
         x = x.permute(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
         x = F.normalize(x, p=1, dim=-1)       
         x = F.linear(x, self.pwconv_weight)
+        return x
+    
+    def _reconstruct(self, h, weight=None):
+        x = F.linear(h, self.pwconv_weight.t())
+        x = F.normalize(x, p=1, dim=-1)
+        x = x.permute(0, 3, 1, 2) # (N, H, W, C) -> (N, C, H, W)
+        x = F.conv_transpose2d(x, weight=self.dwconv_weight, padding=self.padding, groups=self.dim)
         return x
 
     def _check_forward(self, input):
@@ -258,15 +265,16 @@ class ConvNeXt(NetworkTemplate):
                 downsamplers=[
                     nn.Sequential(
                                 nn.Conv2d(in_channels, dims[0], kernel_size=3, stride=1, padding=1),
+                                # nn.Conv2d(in_channels, dims[0], kernel_size=2, stride=2, padding=0),
                                 LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
                             ),
                     nn.Sequential(
                                 LayerNorm(dims[0], eps=1e-6, data_format="channels_first"),
-                                nn.Conv2d(dims[0], dims[1], kernel_size=3, stride=2, padding=2)
+                                nn.Conv2d(dims[0], dims[1], kernel_size=2, stride=2, padding=0)
                             ),
                     nn.Sequential(
                                 LayerNorm(dims[1], eps=1e-6, data_format="channels_first"),
-                                nn.Conv2d(dims[1], dims[2], kernel_size=3, stride=2, padding=2)
+                                nn.Conv2d(dims[1], dims[2], kernel_size=2, stride=2, padding=0)
                             ),
                 ],
                 head=nn.Sequential(
@@ -328,15 +336,16 @@ class NNMFConvNeXt(NetworkTemplate):
                 downsamplers=[
                     nn.Sequential(
                                 nn.Conv2d(in_channels, dims[0], kernel_size=3, stride=1, padding=1),
+                                # nn.Conv2d(in_channels, dims[0], kernel_size=2, stride=2, padding=0),
                                 LayerNorm(dims[0], eps=1e-6, data_format="channels_first")
                             ),
                     nn.Sequential(
                                 LayerNorm(dims[0], eps=1e-6, data_format="channels_first"),
-                                nn.Conv2d(dims[0], dims[1], kernel_size=3, stride=2, padding=2)
+                                nn.Conv2d(dims[0], dims[1], kernel_size=2, stride=2, padding=0)
                             ),
                     nn.Sequential(
                                 LayerNorm(dims[1], eps=1e-6, data_format="channels_first"),
-                                nn.Conv2d(dims[1], dims[2], kernel_size=3, stride=2, padding=2)
+                                nn.Conv2d(dims[1], dims[2], kernel_size=2, stride=2, padding=0)
                             ),
                 ],
                 head=nn.Sequential(

@@ -173,8 +173,8 @@ class NNMFLayer(nn.Module):
     def _forward_iteration(self, input):
         self.forward_iterations += 1
         new_h, self.reconstruction = self._nnmf_iteration(input)
-        self.convergence.append(F.mse_loss(new_h, self.h))
-        self.reconstruction_mse.append(F.mse_loss(self.reconstruction, input))
+        # self.convergence.append(F.mse_loss(new_h, self.h))
+        # self.reconstruction_mse.append(F.mse_loss(self.reconstruction, input))
         self.h = new_h
 
     def forward(self, input):
@@ -551,7 +551,7 @@ class NNMFConv2d(NNMFLayer):
         normalized_weight = F.normalize(self.weight.data, p=1, dim=(1, 2, 3))
         self.weight.data = F.normalize(
             normalized_weight.clamp(min=SECURE_TENSOR_MIN), p=1, dim=(1, 2, 3)
-        )
+        ) / self.groups
 
     def _reconstruct(self, h, weight=None):
         if weight is None:
@@ -603,7 +603,7 @@ class NNMFConv2d(NNMFLayer):
         self.h = torch.ones(x.shape[0], self.out_channels, *self.output_size).to(x.device)
 
     def _check_forward(self, input):
-        assert self.weight.sum((1, 2, 3), keepdim=True).allclose(
+        assert (self.weight.sum((1, 2, 3), keepdim=True)*self.groups).allclose(
             torch.ones_like(self.weight), atol=COMPARISSON_TOLERANCE
         ), self.weight.sum((1, 2, 3))
         assert (self.weight >= 0).all(), self.weight.min()
