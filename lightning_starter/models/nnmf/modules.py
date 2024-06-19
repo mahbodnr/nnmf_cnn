@@ -152,7 +152,7 @@ class NNMFLayer(nn.Module):
             reconstruction = F.normalize(
                 reconstruction, p=1, dim=self.normalize_reconstruction_dim, eps=1e-20
             )
-        return self._forward(input / reconstruction), reconstruction 
+        return self._forward(input / reconstruction), reconstruction
         # return self._forward(input - reconstruction), reconstruction # MSE model
 
     def _nnmf_iteration(self, input):
@@ -526,7 +526,9 @@ class NNMFConv2d(NNMFLayer):
         self.padding = _pair(padding)
         self.stride = _pair(stride)
         self.dilation = _pair(dilation)
-        assert in_channels % groups == 0, f"in_channels {in_channels} must be divisible by groups {groups}"
+        assert (
+            in_channels % groups == 0
+        ), f"in_channels {in_channels} must be divisible by groups {groups}"
         self.groups = groups
         self.n_iterations = n_iterations
         self.normalize_channels = normalize_channels
@@ -537,7 +539,10 @@ class NNMFConv2d(NNMFLayer):
 
         self.weight = NonNegativeParameter(
             torch.rand(
-                out_channels, in_channels//groups, self.kernel_size[0], self.kernel_size[1]
+                out_channels,
+                in_channels // groups,
+                self.kernel_size[0],
+                self.kernel_size[1],
             )
         )
         self.convolution_contribution_map = None
@@ -551,7 +556,7 @@ class NNMFConv2d(NNMFLayer):
         normalized_weight = F.normalize(self.weight.data, p=1, dim=(1, 2, 3))
         self.weight.data = F.normalize(
             normalized_weight.clamp(min=SECURE_TENSOR_MIN), p=1, dim=(1, 2, 3)
-        ) / self.groups
+        )  # / self.groups
 
     def _reconstruct(self, h, weight=None):
         if weight is None:
@@ -568,7 +573,11 @@ class NNMFConv2d(NNMFLayer):
         if weight is None:
             weight = self.weight
         return F.conv2d(
-            nnmf_update, self.weight, padding=self.padding, stride=self.stride, groups=self.groups
+            nnmf_update,
+            self.weight,
+            padding=self.padding,
+            stride=self.stride,
+            groups=self.groups,
         )
 
     def _process_h(self, h):
@@ -600,10 +609,14 @@ class NNMFConv2d(NNMFLayer):
             raise ValueError(
                 f"Reconstruction size {reconstruct_size} does not match input size {list(x.shape[-2:])}. Use ForwardNNMFConv2d instead"
             )
-        self.h = torch.ones(x.shape[0], self.out_channels, *self.output_size).to(x.device)
+        self.h = torch.ones(x.shape[0], self.out_channels, *self.output_size).to(
+            x.device
+        )
 
     def _check_forward(self, input):
-        assert (self.weight.sum((1, 2, 3), keepdim=True)*self.groups).allclose(
+        assert (
+            self.weight.sum((1, 2, 3), keepdim=True) #* self.groups
+        ).allclose(
             torch.ones_like(self.weight), atol=COMPARISSON_TOLERANCE
         ), self.weight.sum((1, 2, 3))
         assert (self.weight >= 0).all(), self.weight.min()
@@ -647,6 +660,7 @@ class NNMFConv2d(NNMFLayer):
             f"n_iterations={self.n_iterations}, padding={self.padding}, stride={self.stride})"
         )
 
+
 class ForwardNNMF(NNMFLayer):
     def _reconstruct(self, h):
         return torch.autograd.functional.vjp(
@@ -656,7 +670,7 @@ class ForwardNNMF(NNMFLayer):
             create_graph=True,
         )[1]
 
-    
+
 class BackwardNNMF(NNMFLayer):
     def _forward(self, nnmf_update):
         return torch.autograd.functional.vjp(
@@ -743,7 +757,9 @@ class LocalNNMFDense(LocalNNMFLayer, NNMFDense):
             normalize_reconstruction=normalize_reconstruction,
             normalize_reconstruction_dim=normalize_reconstruction_dim,
         )
-        self.weight = NonNegativeParameter(torch.rand(out_features, in_features), requires_grad=False)
+        self.weight = NonNegativeParameter(
+            torch.rand(out_features, in_features), requires_grad=False
+        )
         self.w_update_rate = w_update_rate
 
     @torch.no_grad()

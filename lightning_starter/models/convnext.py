@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from timm.models.layers import trunc_normal_, DropPath
 from timm.models.registry import register_model
 
-from .nnmf.modules import NNMFConv2d, NNMFLayer, SECURE_TENSOR_MIN, ForwardNNMF
+from .nnmf.modules import NNMFConv2d, NNMFLayer, SECURE_TENSOR_MIN, ForwardNNMF, NNMFDense
 from .nnmf.parameters import NonNegativeParameter
 
 from .network_template import NetworkTemplate
@@ -25,8 +25,12 @@ class Block(nn.Module):
         self.dwconv = nn.Conv2d(dim, dim, kernel_size=kernel_size, padding=padding, groups=dim, bias=False) # depthwise conv
         self.norm = LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, expansion_ratio * dim) # pointwise/1x1 convs, implemented with linear layers
+        # self.dwconv = nn.Conv2d(dim, expansion_ratio * dim, kernel_size=kernel_size, padding=padding, groups=dim, bias=False) # depthwise conv
+        # self.norm = LayerNorm(expansion_ratio * dim, eps=1e-6)
+        # self.pwconv1 = nn.Linear(expansion_ratio * dim, dim) # pointwise/1x1 convs, implemented with linear layers
         self.act = nn.GELU()
         self.pwconv2 = nn.Linear(expansion_ratio * dim, dim)
+        # self.pwconv2 = nn.Linear(dim, dim)
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), 
                                     requires_grad=True) if layer_scale_init_value > 0 else None
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -59,11 +63,15 @@ class NNMFBlock(nn.Module):
     """
     def __init__(self, dim, nnmf_iterations=20, kernel_size= 7, padding=3, expansion_ratio= 2, drop_path=0., layer_scale_init_value=1e-6):
         super().__init__()
-        self.dwconv = NNMFConv2d(dim, dim, normalize_channels=True, n_iterations=nnmf_iterations, backward_method="all_grads", kernel_size=kernel_size, padding=padding, groups=dim) # depthwise conv
+        self.dwconv = NNMFConv2d(dim, dim, normalize_channels=False, n_iterations=nnmf_iterations, backward_method="all_grads", kernel_size=kernel_size, padding=padding, groups=dim) # depthwise conv
         self.norm = LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, expansion_ratio * dim) # pointwise/1x1 convs, implemented with linear layers
+        # self.dwconv = NNMFConv2d(dim, expansion_ratio * dim, normalize_channels=False, n_iterations=nnmf_iterations, backward_method="all_grads", kernel_size=kernel_size, padding=padding, groups=dim) # depthwise conv
+        # self.norm = LayerNorm(expansion_ratio * dim, eps=1e-6)
+        # self.pwconv1 = nn.Linear(expansion_ratio * dim, dim) # pointwise/1x1 convs, implemented with linear layers
         self.act = nn.GELU()
         self.pwconv2 = nn.Linear(expansion_ratio * dim, dim)
+        # self.pwconv2 = nn.Linear(dim, dim)
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), 
                                     requires_grad=True) if layer_scale_init_value > 0 else None
         self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
@@ -168,6 +176,76 @@ class NNMFConvs(NNMFLayer):
         assert (self.pwconv_weight >= 0).all(), self.pwconv_weight.min()
         assert (input >= 0).all(), input.min()
 
+class NNMFBlock3(nn.Module):
+    r""" ConvNeXt Block. There are two equivalent implementations:
+    (1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
+    (2) DwConv -> Permute to (N, H, W, C); LayerNorm (channels_last) -> Linear -> GELU -> Linear; Permute back
+    We use (2) as we find it slightly faster in PyTorch
+    
+    Args:
+        dim (int): Number of input channels.
+        drop_path (float): Stochastic depth rate. Default: 0.0
+        layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
+    """
+    def __init__(self, dim, nnmf_iterations=20, kernel_size= 7, padding=3, expansion_ratio= 2, drop_path=0., layer_scale_init_value=1e-6):
+        super().__init__()
+        self.dwconv = nn.Conv2d(dim, dim, kernel_size=kernel_size, padding=padding, groups=dim, bias=False) # depthwise conv
+        self.norm = LayerNorm(dim, eps=1e-6)
+        self.nnmf_dense = NNMFDense(dim, expansion_ratio*dim, n_iterations= nnmf_iterations, backward_method="all_grads", return_reconstruction=True)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), 
+                                    requires_grad=True) if layer_scale_init_value > 0 else None
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+    def forward(self, x):
+        input = x
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+        x = self.norm(x)
+        x = torch.clamp(x, min=1e-6)
+        _, x = self.nnmf_dense(x)
+        if self.gamma is not None:
+            x = self.gamma * x
+        x = x.permute(0, 3, 1, 2) # (N, H, W, C) -> (N, C, H, W)
+
+        x = input + self.drop_path(x)
+        return x
+    
+class NNMFBlock3p(nn.Module):
+    r""" ConvNeXt Block. There are two equivalent implementations:
+    (1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
+    (2) DwConv -> Permute to (N, H, W, C); LayerNorm (channels_last) -> Linear -> GELU -> Linear; Permute back
+    We use (2) as we find it slightly faster in PyTorch
+    
+    Args:
+        dim (int): Number of input channels.
+        drop_path (float): Stochastic depth rate. Default: 0.0
+        layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
+    """
+    def __init__(self, dim, nnmf_iterations=20, kernel_size= 7, padding=3, expansion_ratio= 2, drop_path=0., layer_scale_init_value=1e-6):
+        super().__init__()
+        self.dwconv = nn.Conv2d(dim, dim, kernel_size=kernel_size, padding=padding, groups=dim, bias=False) # depthwise conv
+        self.norm = LayerNorm(dim, eps=1e-6)
+        self.nnmf_dense = NNMFDense(dim, expansion_ratio*dim, n_iterations= nnmf_iterations, backward_method="all_grads", return_reconstruction=False)
+        self.pwconv2 = nn.Linear(expansion_ratio * dim, dim)
+        self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((dim)), 
+                                    requires_grad=True) if layer_scale_init_value > 0 else None
+        self.drop_path = DropPath(drop_path) if drop_path > 0. else nn.Identity()
+
+    def forward(self, x):
+        input = x
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 1) # (N, C, H, W) -> (N, H, W, C)
+        x = self.norm(x)
+        x = torch.clamp(x, min=1e-6)
+        x = self.nnmf_dense(x)
+        x = self.pwconv2(x)
+        if self.gamma is not None:
+            x = self.gamma * x
+        x = x.permute(0, 3, 1, 2) # (N, H, W, C) -> (N, C, H, W)
+
+        x = input + self.drop_path(x)
+        return x
+
 class NNMFBlock2(nn.Module):
     r""" ConvNeXt Block. There are two equivalent implementations:
     (1) DwConv -> LayerNorm (channels_first) -> 1x1 Conv -> GELU -> 1x1 Conv; all in (N, C, H, W)
@@ -199,6 +277,7 @@ class NNMFBlock2(nn.Module):
         x = input + self.drop_path(x)
         return x
     
+
 class LayerNorm(nn.Module):
     r""" LayerNorm that supports two data formats: channels_last (default) or channels_first. 
     The ordering of the dimensions in the inputs. channels_last corresponds to inputs with 
@@ -364,7 +443,6 @@ def nnmf_convnext(**kwargs):
         nnmf_iterations=kwargs.get("nnmf_iterations", 20),
     )
 
-# Register the model
 @register_model
 def nnmf_convnext2(**kwargs):
     return NNMFConvNeXt(
@@ -375,4 +453,14 @@ def nnmf_convnext2(**kwargs):
         n_classes=10,
         nnmf_iterations=kwargs.get("nnmf_iterations", 20),
         block=NNMFBlock2
+    )
+
+@register_model
+def nnmf_convnext3(**kwargs):
+    return NNMFConvNeXt(
+        in_channels=3,
+        dims=kwargs.get("dims", [32, 64, 96]),
+        n_classes=10,
+        nnmf_iterations=kwargs.get("nnmf_iterations", 20),
+        block=NNMFBlock3p
     )

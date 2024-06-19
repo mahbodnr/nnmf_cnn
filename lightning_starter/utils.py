@@ -222,6 +222,7 @@ def get_dataloader(args):
         batch_size=args.eval_batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
+        shuffle=False,
     )
 
     return train_dl, test_dl

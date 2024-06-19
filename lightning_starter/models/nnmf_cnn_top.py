@@ -4,139 +4,92 @@ import torch
 import torch.nn as nn
 from timm.models.registry import register_model
 
-from .ann import ANN
-from .cnn import calculate_last_layer_size
+from .cnn_template import CNNNetworkTemplate
 
 
-class NnmfCnn(nn.Module):
-    def __init__(
-        self,
-        features,
-        n_iterations=5,
-        kernel_size=3,
-        batchnorm=True,
-        activation=nn.ReLU(),
-        pooling=True,
-    ):
-        super(NnmfCnn, self).__init__()
-        self.features = features
-        self.blocks = nn.ModuleList()
-
-        if isinstance(kernel_size, int):
-            kernel_size = [kernel_size] * (len(features) - 1)
-        if isinstance(pooling, bool):
-            pooling = [pooling] * (len(features) - 1)
-        if isinstance(activation, nn.Module):
-            activation = [activation] * (len(features) - 1)
-
-        assert len(kernel_size) == len(features) - 1
-        for feature_idx in range(len(features) - 1):
-            block = nn.Sequential(
-                nn.ReLU(),
-                NNMFConv2d(
-                    features[feature_idx],
-                    features[feature_idx + 1],
-                    n_iterations=n_iterations,
-                    kernel_size=kernel_size[feature_idx],
-                    # normalize_channels=True,
-                    backward_method="all_grads",
-                ),
-                nn.Conv2d(
-                    features[feature_idx + 1],
-                    features[feature_idx + 1],
-                    kernel_size=1,
-                ),
-            )
-            if activation[feature_idx] is not None:
-                block.append(activation[feature_idx])
-            if batchnorm:
-                block.append(nn.BatchNorm2d(features[feature_idx + 1]))
-            if pooling[feature_idx]:
-                block.append(nn.AvgPool2d(2, 2))
-
-            self.blocks.append(block)
-
-    def forward(self, x):
-        for block in self.blocks:
-            x = block(x)
-        return x
+def block(
+    features_in,
+    features_out,
+    kernel_size,
+    batchnorm=False,
+    n_iterations=20,
+    normalize_channels=False,
+    backward_method="all_grads",
+):
+    output = nn.Sequential(
+        nn.ReLU(),
+        NNMFConv2d(
+            features_in,
+            features_out,
+            n_iterations=n_iterations,
+            kernel_size=kernel_size,
+            normalize_channels=normalize_channels,
+            backward_method=backward_method,
+        ),
+        nn.BatchNorm2d(
+            features_out,
+            track_running_stats=False,
+        ) if batchnorm else nn.Identity(),
+        nn.ReLU(),
+        nn.Conv2d(
+            features_out,
+            features_out,
+            kernel_size=1,
+        ),
+        nn.BatchNorm2d(
+            features_out,
+            track_running_stats=False,
+        ) if batchnorm else nn.Identity(),
+    )
 
 
-class NnmfCnnNetwork(nn.Module):
+    # Init the cnn top layers 1x1 conv2d layers
+    for netp in output[-2].parameters():
+        with torch.no_grad():
+            if netp.ndim == 1:
+                netp.data *= 0
+            if netp.ndim == 4:
+                assert netp.shape[-2] == 1
+                assert netp.shape[-1] == 1
+                netp[: netp.shape[0], : netp.shape[0], 0, 0] = torch.eye(
+                    netp.shape[0], dtype=netp.dtype, device=netp.device
+                )
+                netp[netp.shape[0] :, :, 0, 0] = 0
+                netp[:, netp.shape[0] :, 0, 0] = 0
+
+    return output
+
+class NnmfCnnNetwork(CNNNetworkTemplate):
     def __init__(
         self,
         input_shape,
-        nnmf_iterations=5,
         cnn_features=[64, 128, 256],
         cnn_kernel_sizes=3,
         ann_layers=[1024, 256, 64, 10],
         pooling=True,
+        batchnorm=False,
         activation=nn.ReLU(),
     ):
-        super(NnmfCnnNetwork, self).__init__()
-        self.conv = NnmfCnn(
-            [input_shape[0]] + cnn_features,
-            kernel_size=cnn_kernel_sizes,
-            n_iterations=nnmf_iterations,
-            batchnorm=False,
+        super(NnmfCnnNetwork, self).__init__(
+            blockModule=block,
+            input_shape=input_shape,
+            cnn_features=cnn_features,
+            cnn_kernel_sizes=cnn_kernel_sizes,
+            ann_layers=ann_layers,
             pooling=pooling,
             activation=activation,
+            batchnorm=batchnorm,
         )
-        if ann_layers:
-            self.ann = ANN(
-                [
-                    calculate_last_layer_size(
-                        input_shape,
-                        cnn_features,
-                    )
-                ]
-                + ann_layers,
-                batchnorm=False,
-                # output_activation=nn.Softmax(dim=-1),
-            )
-        else:
-            self.ann = None
-
-    def forward(self, x):
-        x = self.conv(x)
-        x = torch.flatten(x, 1)
-        if self.ann:
-            x = self.ann(x)
-        return x
 
 
 @register_model
 def nnmf_cnn_top(**kwargs):
     return NnmfCnnNetwork(
-        input_shape=kwargs.get("input_shape", (3, 32, 32)),
+        input_shape=kwargs.get("input_shape", (3, 28, 28)),
         cnn_features=kwargs.get("cnn_features", [32, 64, 96, 10]),
         cnn_kernel_sizes=[5, 5, 4, 1],
         pooling=[True, True, False, False],
         activation=[nn.ReLU()] * 3 + [nn.Softmax(dim=1)],
+        batchnorm=False,
         ann_layers=[],
-        nnmf_iterations=kwargs.get("nnmf_iterations", 5),
-    )
-
-@register_model
-def nnmf_cnn_top_d(**kwargs):
-    return NnmfCnnNetwork(
-        input_shape=kwargs.get("input_shape", (3, 32, 32)),
-        cnn_features=kwargs.get("cnn_features", [64, 128, 192, 10]),
-        cnn_kernel_sizes=[5, 5, 4, 1],
-        pooling=[True, True, False, False],
-        activation=[nn.ReLU()] * 3 + [nn.Softmax(dim=1)],
-        ann_layers=[],
-        nnmf_iterations=kwargs.get("nnmf_iterations", 5),
-    )
-
-@register_model
-def nnmf_cnn_top_m(**kwargs):
-    return NnmfCnnNetwork(
-        input_shape=kwargs.get("input_shape", (3, 32, 32)),
-        cnn_features=kwargs.get("cnn_features", [64, 92, 128, 10]),
-        cnn_kernel_sizes=[5, 5, 4, 1],
-        pooling=[True, True, False, False],
-        activation=[nn.ReLU()] * 3 + [nn.Softmax(dim=1)],
-        ann_layers=[],
-        nnmf_iterations=kwargs.get("nnmf_iterations", 5),
     )

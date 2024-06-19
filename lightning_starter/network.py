@@ -38,6 +38,8 @@ class Net(pl.LightningModule):
         if hparams.mixup:
             self.mixup = MixUp(alpha=hparams.mixup_alpha)
 
+        self.test_noise_level = None
+
     def log_time(func):
         """
         A decorator to measure the time of a function and log it.
@@ -194,6 +196,8 @@ class Net(pl.LightningModule):
     @torch.no_grad()
     def test_step(self, batch, batch_idx):
         img, label = batch
+        if self.test_noise_level is not None and self.test_noise_level > 0:
+            img = img + self.test_noise_level * torch.randn_like(img) + img.mean()
         out = self(img)
         loss = self.calculate_loss(out, label)
         acc = torch.eq(out.argmax(-1), label).float().mean()

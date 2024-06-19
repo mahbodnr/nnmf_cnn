@@ -83,7 +83,7 @@ class CNNNetworkTemplate(nn.Module):
                     )
                 ]
                 + ann_layers,
-                batchnorm=False,
+                batchnorm=batchnorm,
                 # output_activation=nn.Softmax(dim=-1),
             )
         else:

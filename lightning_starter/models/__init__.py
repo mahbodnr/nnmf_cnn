@@ -5,3 +5,5 @@ from .cnn_cnn_top import *
 from .nnmf_cnn_top import *
 from .cnnmf_cnn_top import *
 from .convnext import *
+from .vit import *
+from .nnmf_vit import *
