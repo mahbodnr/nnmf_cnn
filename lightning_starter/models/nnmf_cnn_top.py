@@ -28,7 +28,6 @@ def block(
         ),
         nn.BatchNorm2d(
             features_out,
-            track_running_stats=False,
         ) if batchnorm else nn.Identity(),
         nn.ReLU(),
         nn.Conv2d(
@@ -38,7 +37,6 @@ def block(
         ),
         nn.BatchNorm2d(
             features_out,
-            track_running_stats=False,
         ) if batchnorm else nn.Identity(),
     )
 

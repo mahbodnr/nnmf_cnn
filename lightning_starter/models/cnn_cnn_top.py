@@ -14,7 +14,7 @@ def block(features_in, features_out, kernel_size, batchnorm=True):
         ),
         nn.BatchNorm2d(
             features_out,
-            track_running_stats=False,
+            track_running_stats=True,
         ) if batchnorm else nn.Identity(),
         nn.ReLU(),
         nn.Conv2d(
@@ -24,7 +24,7 @@ def block(features_in, features_out, kernel_size, batchnorm=True):
         ),
         nn.BatchNorm2d(
             features_out,
-            track_running_stats=False,
+            track_running_stats=True,
         ) if batchnorm else nn.Identity(),
     )
 

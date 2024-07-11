@@ -38,6 +38,7 @@ def load_model_data(model_path, args:dict = None):
                 jitter_contrast=0.1,
                 jitter_saturation=0.1,
                 jitter_hue=0.15,
+                allow_download=args.download_data,
             )
     else:
         train_dl, test_dl = get_dataloader(args)

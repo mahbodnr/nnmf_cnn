@@ -16,6 +16,7 @@ def get_the_data(
     jitter_contrast: float = 0.1,
     jitter_saturation: float = 0.1,
     jitter_hue: float = 0.15,
+    allow_download: bool = True,
 ):
     dataset = dataset.upper()
     if dataset == "MNIST":
@@ -48,10 +49,10 @@ def get_the_data(
         )
 
         tv_dataset_train = torchvision.datasets.CIFAR10(
-            root="~/data", train=True, download=True, transform=train_processing_chain
+            root="~/data", train=True, download=allow_download, transform=train_processing_chain
         )
         tv_dataset_test = torchvision.datasets.CIFAR10(
-            root="~/data", train=False, download=True, transform=test_processing_chain
+            root="~/data", train=False, download=allow_download, transform=test_processing_chain
         )
     else:
         raise NotImplementedError("This dataset is not implemented.")
